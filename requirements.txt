@@ -1,0 +1,9 @@
+entsoe-py>=0.8
+pandas>=2.2
+pyarrow>=14        # raw parquet cache
+yfinance>=0.2        # free TTF gas + EUA carbon (no key)
+gie-py>=0.4          # free AGSI+ gas storage (register for key)
+terna-py>=0.2        # OPTIONAL: inter-zonal flows (register at developer.terna.it)
+python-dotenv>=1.0   # loads ENTSOE_TOKEN from .env
+matplotlib>=3.7      # notebooks only
+pytest>=8.0          # tests only

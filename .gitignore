@@ -1,0 +1,21 @@
+# secrets — never commit tokens or keys
+.env
+!.env.example
+*.token
+
+# ETL outputs (regenerate with `python -m etl.build`)
+data/*.json
+data/raw/
+data/epf/
+tools/_settle_snapshot.json
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# editors / os
+.vscode/
+.idea/
+.DS_Store

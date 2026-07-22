@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="it"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>A · Carta tecnica</title>
+<style>
+:root{
+  --paper:#eceeeb; --panel:#f5f6f4; --ink:#171d1b; --ink-2:#4a544f; --ink-3:#8a938d;
+  --rule:#c9cec9; --rule-2:#aab0aa; --petrol:#0a5c5c; --signal:#b7452a;
+  --grot:"Arial Narrow",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box} body{margin:0;background:var(--paper);color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;padding:26px;max-width:1060px;margin:0 auto}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+/* masthead */
+.mast{border-top:3px solid var(--ink);border-bottom:1px solid var(--rule-2);padding:10px 0 12px;
+  display:flex;justify-content:space-between;align-items:flex-end}
+.mast h1{margin:0;font-family:var(--grot);font-stretch:condensed;font-weight:700;font-size:30px;
+  letter-spacing:.02em;text-transform:uppercase;line-height:.95}
+.mast .doc{font-family:var(--mono);font-size:10.5px;color:var(--ink-2);text-align:right;line-height:1.7}
+.mast .doc b{color:var(--ink)}
+/* ledger */
+.ledger{display:grid;grid-template-columns:repeat(5,1fr);border-bottom:1px solid var(--rule-2)}
+.cell{padding:14px 16px 12px;border-right:1px solid var(--rule)}
+.cell:last-child{border-right:0}
+.cell .h{font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3)}
+.cell .v{font-family:var(--mono);font-size:27px;font-weight:600;margin-top:8px;letter-spacing:-.02em}
+.cell .v small{font-size:12px;color:var(--ink-3);font-weight:400}
+.cell .fn{font-family:var(--mono);font-size:10px;color:var(--petrol);margin-top:6px}
+.cell.sig .v{color:var(--signal)}
+sup{color:var(--petrol);font-family:var(--mono);font-size:10px;font-weight:700}
+/* chart block */
+.block{margin-top:22px}
+.block .cap{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--rule-2);padding-bottom:6px}
+.block h2{margin:0;font-family:var(--grot);font-stretch:condensed;font-weight:700;font-size:16px;
+  text-transform:uppercase;letter-spacing:.04em}
+.block .fig{font-family:var(--mono);font-size:10px;color:var(--ink-3)}
+svg{display:block;width:100%;height:auto;margin-top:8px}
+.axis{font-family:var(--mono);font-size:9.5px;fill:var(--ink-3)}
+/* footnotes */
+.notes{margin-top:22px;border-top:1px solid var(--rule-2);padding-top:12px;
+  columns:2;column-gap:34px;font-family:var(--mono);font-size:10.5px;color:var(--ink-2);line-height:1.7}
+.notes b{color:var(--petrol)}
+.tag{display:inline-block;background:var(--paper);border-bottom:1px dashed var(--rule-2)}
+@media(max-width:640px){.ledger{grid-template-columns:repeat(2,1fr)}.notes{columns:1}}
+</style></head>
+<body>
+  <div class="mast">
+    <h1>Mercato Elettrico<br>Italia — Nord</h1>
+    <div class="doc">RAPPORTO OPERATIVO · <b>MGP</b><br>zona <b>IT_NORD</b> · risoluzione <b>PT15M</b><br>
+      finestra <b>2025-10-01 → 2026-07-08</b><br>fonte ENTSO-E · Terna</div>
+  </div>
+
+  <div class="ledger">
+    <div class="cell sig"><div class="h">Prezzo zonale <sup>1</sup></div><div class="v" id="k-price">–<small> €/MWh</small></div><div class="fn">Δ24h <span id="d-price">–</span></div></div>
+    <div class="cell"><div class="h">Carico <sup>1</sup></div><div class="v" id="k-load">–<small> MW</small></div></div>
+    <div class="cell"><div class="h">Residuo <sup>2</sup></div><div class="v" id="k-res">–<small> MW</small></div><div class="fn">Δ24h <span id="d-res">–</span></div></div>
+    <div class="cell"><div class="h">Rinnovabili <sup>3</sup></div><div class="v" id="k-ren">–<small> %</small></div></div>
+    <div class="cell"><div class="h">Saldo import <sup>1</sup></div><div class="v" id="k-imp">–<small> MW</small></div></div>
+  </div>
+
+  <div class="block">
+    <div class="cap"><h2>Domanda residua e prezzo</h2>
+      <div class="fig">Fig. 1 — l'unità marginale segue il residuo · corr = <b class="mono" id="corr">–</b></div></div>
+    <svg id="chart" viewBox="0 0 1000 300" preserveAspectRatio="none" aria-label="serie storica"></svg>
+  </div>
+
+  <div class="notes" id="notes"></div>
+
+<script>
+"use strict";
+// compact sample (hourly, ~10 days) — same schema idea as the ETL output
+function gen(){const n=240,t0=Date.parse("2026-06-04T00:00+02:00");let s=3;const r=()=>((s=(s*48271)%2147483647)/2147483647);
+  const idx=[],price=[],load=[],res=[],ren=[],imp=[];
+  for(let i=0;i<n;i++){const d=new Date(t0+i*3600e3),h=d.getHours(),we=[0,6].includes(d.getDay());
+    const ld=(we?12800:15200)+3400*Math.sin(Math.PI*(h-8)/16)+1400*Math.max(0,Math.sin(Math.PI*(h-17)/6))+(r()-.5)*500;
+    const sun=Math.max(0,Math.sin(Math.PI*(h-6)/12)),sol=6000*sun*(.85+.3*r()),util=.44*sol;
+    const rs=ld-util-(1100+800*r())-1900-780;const pr=Math.max(-10,44+.0058*rs+13*Math.sin(Math.PI*(h-19)/12)+(r()-.5)*15);
+    idx.push(d.getTime());price.push(pr);load.push(ld);res.push(rs);ren.push((sol+2000+1900+780)/ld);imp.push(2200+600*Math.sin(h/4));}
+  return{idx,price,load,res,ren,imp};}
+const D=gen(), $=s=>document.querySelector(s);
+const fmt=(x,d=0)=>x.toLocaleString("it-IT",{minimumFractionDigits:d,maximumFractionDigits:d});
+const last=a=>a[a.length-1];
+function corr(a,b){const n=a.length,ma=a.reduce((x,y)=>x+y)/n,mb=b.reduce((x,y)=>x+y)/n;let ab=0,aa=0,bb=0;
+  for(let i=0;i<n;i++){ab+=(a[i]-ma)*(b[i]-mb);aa+=(a[i]-ma)**2;bb+=(b[i]-mb)**2}return ab/Math.sqrt(aa*bb);}
+// KPIs
+$("#k-price").innerHTML=fmt(last(D.price),1)+'<small> €/MWh</small>';
+$("#k-load").innerHTML=fmt(last(D.load))+'<small> MW</small>';
+$("#k-res").innerHTML=fmt(last(D.res))+'<small> MW</small>';
+$("#k-ren").innerHTML=fmt(last(D.ren)*100)+'<small> %</small>';
+$("#k-imp").innerHTML=fmt(last(D.imp))+'<small> MW</small>';
+const dP=last(D.price)-D.price[D.price.length-25],dR=last(D.res)-D.res[D.res.length-25];
+$("#d-price").textContent=(dP>=0?"+":"")+fmt(dP,1);$("#d-res").textContent=(dR>=0?"+":"")+fmt(dR);
+$("#corr").textContent=corr(D.res,D.price).toFixed(2);
+// chart (SVG, two ruled axes)
+(function(){const W=1000,H=300,pl=44,pr=44,pt=14,pb=24;
+  const xs=v=>pl+(v-D.idx[0])/(last(D.idx)-D.idx[0])*(W-pl-pr);
+  const rmin=Math.min(...D.res),rmax=Math.max(...D.res),pmin=Math.min(0,...D.price),pmax=Math.max(...D.price);
+  const yR=v=>H-pb-(v-rmin)/(rmax-rmin)*(H-pt-pb),yP=v=>H-pb-(v-pmin)/(pmax-pmin)*(H-pt-pb);
+  let g="";const ticks=(mn,mx,k)=>{const st=(mx-mn)/k,o=[];for(let i=0;i<=k;i++)o.push(mn+i*st);return o;};
+  ticks(rmin,rmax,4).forEach(v=>{g+=`<line x1="${pl}" x2="${W-pr}" y1="${yR(v)}" y2="${yR(v)}" stroke="#c9cec9"/>`+
+    `<text class="axis" x="${pl-6}" y="${yR(v)+3}" text-anchor="end" fill="#0a5c5c">${(v/1000).toFixed(1)}k</text>`});
+  ticks(pmin,pmax,4).forEach(v=>{g+=`<text class="axis" x="${W-pr+6}" y="${yP(v)+3}" fill="#b7452a">${v.toFixed(0)}</text>`});
+  ticks(D.idx[0],last(D.idx),6).forEach(v=>{const d=new Date(v);g+=`<text class="axis" x="${xs(v)}" y="${H-8}" text-anchor="middle">${("0"+d.getDate()).slice(-2)}/${("0"+(d.getMonth()+1)).slice(-2)}</text>`});
+  const path=(vals,ym)=>vals.map((v,i)=>(i?"L":"M")+xs(D.idx[i]).toFixed(1)+" "+ym(v).toFixed(1)).join(" ");
+  g+=`<path d="${path(D.res,yR)}" fill="none" stroke="#0a5c5c" stroke-width="1.4"/>`;
+  g+=`<path d="${path(D.price,yP)}" fill="none" stroke="#b7452a" stroke-width="1.4"/>`;
+  $("#chart").innerHTML=g;})();
+// footnotes = provenance
+$("#notes").innerHTML=[
+  ['1','Osservato','prezzo di clearing e misure ENTSO-E, presi come sono.'],
+  ['2','Stimato','domanda residua = carico − (solare − FV distribuito) − eolico − idro fluente − geo. Eredita la stima del FV distribuito ricavata dall\'errore di chiusura del bilancio.'],
+  ['3','Derivato','quota rinnovabile = generazione must-run / carico; funzione esatta di grandezze osservate.'],
+].map(([n,t,d])=>`<div><sup>${n}</sup> <b>${t}.</b> ${d}</div>`).join("");
+</script>
+</body></html>
