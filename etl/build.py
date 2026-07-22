@@ -383,11 +383,14 @@ def publish_fuels(start=None, end=None) -> dict | None:
     return out
 
 
-def _hourly_profile(series: dict):
-    """24 hourly-mean zonal prices for the map slider, preferring TODAY (day-ahead prices are
-    complete for today); falls back to the last well-covered day. Returns (profile, date)."""
+def _hourly_profile(series: dict, column: str = "price_zonal"):
+    """24 hourly means of `column` for the map slider, preferring TODAY (day-ahead prices are
+    complete for today); falls back to the last well-covered day. Returns (profile, date).
+
+    Also used for load, which supplies the PUN weights — the day chosen must match the price
+    profile's, or prices and weights would come from different days."""
     idx = pd.to_datetime(series["index"], utc=True).tz_convert(cfg.TZ)
-    price = pd.Series(series["columns"]["price_zonal"]["values"], index=idx).dropna()
+    price = pd.Series(series["columns"][column]["values"], index=idx).dropna()
     if price.empty:
         return None, None
     days = set(price.index.date)
@@ -408,8 +411,31 @@ def build_snapshot(rows: dict, window_end: str | None, profile_date: str | None 
     zonal prices); the true PUN Index GME is volume-weighted and needs GME data — so the
     spread inherits that proxy status. Carries residual and renewable share per zone too,
     so the map can later be coloured by more than price."""
-    prices = [r["price"] for r in rows.values() if r.get("price") is not None]
-    pun = round(sum(prices) / len(prices)) if prices else None
+    # PUN Index GME weights zonal prices by the volume PURCHASED in each zone. We don't have
+    # GME volumes, but zonal load is the direct measure of that consumption, so weighting by it
+    # is far closer than an unweighted mean: a flat average gives Sicily the same weight as the
+    # North, which consumes ~8x more, so any island decoupling pushed our PUN the wrong way
+    # (measured: 2-3%, up to 4.5 EUR/MWh). Still a PROXY — GME weights exclude pumping and
+    # exports, and bilateral volumes clear differently — but a much better one.
+    def _wmean(pairs):
+        """pairs = [(price, weight)]; falls back to a flat mean if weights are unusable."""
+        ok = [(p, w) for p, w in pairs if p is not None and w is not None and w > 0]
+        if not ok:
+            vals = [p for p, _ in pairs if p is not None]
+            return (sum(vals) / len(vals)) if vals else None
+        return sum(p * w for p, w in ok) / sum(w for _, w in ok)
+
+    pun_val = _wmean([(r.get("price"), r.get("load")) for r in rows.values()])
+    pun = round(pun_val) if pun_val is not None else None
+    # the map slider needs the PUN at every hour, so weight hour by hour too
+    pun_profile = None
+    profs = {z: r.get("profile") for z, r in rows.items() if r.get("profile")}
+    lprofs = {z: r.get("load_profile") for z, r in rows.items() if r.get("load_profile")}
+    if profs:
+        pun_profile = []
+        for h in range(24):
+            v = _wmean([(profs[z][h], (lprofs.get(z) or [None] * 24)[h]) for z in profs])
+            pun_profile.append(round(v, 1) if v is not None else None)
     zones = {}
     for z, r in rows.items():
         p = r.get("price")
@@ -432,9 +458,11 @@ def build_snapshot(rows: dict, window_end: str | None, profile_date: str | None 
         "profile_date": profile_date,
         "resolution": cfg.RESOLUTION,
         "pun_proxy": pun,
+        "pun_profile": pun_profile,
         "peak_hour": peak_hour,
-        "pun_note": "simple unweighted mean of zonal prices — PROXY for PUN Index GME "
-                    "(which is volume-weighted). Wire GME zonal purchase volumes to make exact.",
+        "pun_note": "zonal prices weighted by zonal load — PROXY for PUN Index GME, which "
+                    "weights by MGP purchase volumes (excluding pumping and exports). GME "
+                    "publishes the exact index but only via its website, not an API.",
         "provenance": {"price": cfg.P.OBSERVED, "spread_vs_pun": cfg.P.PROXY,
                        "residual": cfg.P.DERIVED, "renewable_pct": cfg.P.DERIVED},
         "zones": zones,
@@ -449,7 +477,10 @@ def publish_all(zones, start=None, end=None, rebuild: bool = False) -> dict:
             window_end = series["index"][-1] if series["index"] else window_end
             prof, pdate = _hourly_profile(series)
             profile_date = pdate or profile_date
+            lprof, _ = _hourly_profile(series, "load")
             rows[z] = {"price": _at_now(series, "price_zonal"),
+                       "load": _at_now(series, "load"),
+                       "load_profile": lprof,
                        "residual": _at_now(series, "residual_load"),
                        "renewable": _at_now(series, "renewable_penetration"),
                        "profile": prof}

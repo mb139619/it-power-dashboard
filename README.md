@@ -90,8 +90,10 @@ national (gas, storage) or NORD-scoped (border flows) say so on the header.
   requires scraping, so the basis is documented rather than implemented.
 - **Forward curve.** EEX power forwards are paid data, so this is a *fundamental* read, not a
   spot-vs-forward view — and the market-read panel says exactly that.
-- **Exact PUN.** Ours is an unweighted mean of zonal prices (Proxy); the real index is
-  volume-weighted and needs GME volumes.
+- **Exact PUN.** Ours weights zonal prices by zonal load (Proxy). The real PUN Index GME
+  weights by MGP purchase volumes, which exclude pumping and exports; GME publishes the index
+  and the volumes, but through its website rather than an API. Load weighting removes most of
+  the error an unweighted mean carries (2-3%, up to 4.5 EUR/MWh when an island decouples).
 
 ## Methodology
 

@@ -503,13 +503,13 @@
         <h2>Market regime — where the state sits</h2>
         <div class="thesis">Each recent day plotted by realised volatility (x) and price (y) —
           brighter is more recent, so you see the trajectory. Four states split at the median:
-          calm, firm, choppy, stressed.</div>
+          low/high price against low/high volatility.</div>
       </div>
       <div class="legend">
-        <span><span class="swatch" style="background:var(--obs)"></span>calm</span>
-        <span><span class="swatch" style="background:var(--price)"></span>firm</span>
-        <span><span class="swatch" style="background:var(--residual)"></span>choppy</span>
-        <span><span class="swatch" style="background:var(--warn)"></span>stressed</span>
+        <span><span class="swatch" style="background:var(--obs)"></span>low price · low vol</span>
+        <span><span class="swatch" style="background:var(--price)"></span>high price · low vol</span>
+        <span><span class="swatch" style="background:var(--residual)"></span>low price · high vol</span>
+        <span><span class="swatch" style="background:var(--warn)"></span>high price · high vol</span>
       </div>
     </div>
     <div class="fuel-readout" id="rgReadout"></div>
@@ -858,7 +858,11 @@ function renderZones(D, hour){
   const P={};
   for(const k of Object.keys(ZGEO.zones)){const a=prof[k]||SAMPLE_ZP.prof[k]; P[k]=a?Math.round(a[hour]):0;}
   const vals=Object.values(P), lo=Math.min(...vals), hi=Math.max(...vals), spread=hi-lo;
-  const pun=Math.round(vals.reduce((s,v)=>s+v,0)/vals.length);
+  // the PUN is load-weighted server-side (see build.build_snapshot); fall back to a flat mean
+  // only for sample data or an older snapshot that has no profile
+  const pp = D.zonal && D.zonal.pun_profile;
+  const pun = (pp && pp[hour] != null) ? Math.round(pp[hour])
+                                       : Math.round(vals.reduce((s,v)=>s+v,0)/vals.length);
   const spreadOf=k=>P[k]-pun, fill=p=>heat((p-lo)/(hi-lo||1));
   const map=$("#zoneMap"); map.setAttribute("viewBox",ZGEO.viewBox);
   let g="";
@@ -890,7 +894,7 @@ function renderZones(D, hour){
   const pdate=(D.zonal&&D.zonal.profile_date)?D.zonal.profile_date:(live?"latest":"sample day");
   $("#zoneCaption").innerHTML=`Prices for <b class="mono" style="color:var(--ink)">${pdate}</b> \u00b7 hour <b class="mono" style="color:var(--ink)">${hh}</b> \u00b7 PUN proxy \u2248 <b class="mono" style="color:var(--ink)">${pun}</b> \u20ac/MWh \u00b7 cross-zone spread <b class="mono" style="color:var(--ink)">${spread}</b> \u20ac/MWh \u2014 `+
     (spread<=2?`<b>zones coupled</b>, no congestion this hour`:`<b>zones split</b>, the grid is constrained`)+
-    `. PUN is a proxy for the volume-weighted PUN Index GME.`+
+    `. PUN here is zonal prices weighted by zonal load \u2014 a proxy for PUN Index GME, which weights by MGP purchase volumes.`+
     ((D.iflows&&D.iflows.links&&D.iflows.links.length)
       ? ` Arrows are Terna physical flows between zones (width = MW); <b style="color:var(--warn)">red</b> marks a link whose zones price apart \u2014 that link is binding.`
       : ``)+
@@ -1111,16 +1115,19 @@ function drawRegime(D){
   const R=pts.slice(-40);
   if(R.length<5){ box.innerHTML=`<div class="wx-msg">not enough data for a regime read</div>`; cap.textContent=""; return; }
   const vmed=median(R.map(x=>x.v)), pmed=median(R.map(x=>x.p));
-  const STATE={ Calm:{c:"--obs",say:"soft and quiet \u2014 abundant supply, low risk"},
-    Firm:{c:"--price",say:"steadily tight \u2014 expensive but orderly, gas on the margin"},
-    Choppy:{c:"--residual",say:"swinging on thin margins \u2014 renewable-driven, negative-price risk"},
-    Stressed:{c:"--warn",say:"expensive and turbulent \u2014 scarcity and spike risk"} };
-  const label=(v,p)=> v>=vmed ? (p>=pmed?"Stressed":"Choppy") : (p>=pmed?"Firm":"Calm");
+  // Descriptive labels: the quadrant says where you are, the caption says what it means.
+  // Evocative names (calm/firm/choppy/stressed) needed a lookup table to read.
+  const STATE={
+    "low price · low vol":  {c:"--obs",      say:"abundant supply, with little risk priced in"},
+    "high price · low vol": {c:"--price",    say:"expensive but orderly, gas setting the price without stress"},
+    "low price · high vol": {c:"--residual", say:"renewable-driven swings on thin margins, with negative-price risk"},
+    "high price · high vol":{c:"--warn",     say:"scarcity conditions, with spike risk"} };
+  const label=(v,p)=> (p>=pmed?"high price":"low price") + " \u00b7 " + (v>=vmed?"high vol":"low vol");
   const cur=R.at(-1), state=label(cur.v,cur.p);
   const persist=R.slice(-7).filter(x=>label(x.v,x.p)===state).length;
   const vpct=Math.round(pctlOf(R.map(x=>x.v),cur.v)*100), ppct=Math.round(pctlOf(R.map(x=>x.p),cur.p)*100);
   box.innerHTML=
-    `<div class="fstat"><div class="fl">Market state</div><div class="fv" style="color:var(${STATE[state].c})">${state}</div></div>`+
+    `<div class="fstat"><div class="fl">Market state</div><div class="fv" style="color:var(${STATE[state].c});font-size:14px;line-height:1.35">${state.replace(" \u00b7 ","<br>")}</div></div>`+
     `<div class="fstat"><div class="fl">Volatility now</div><div class="fv">${cur.v.toFixed(0)}<small> % \u00b7 ${vpct}th pct</small></div></div>`+
     `<div class="fstat"><div class="fl">Price now</div><div class="fv">${cur.p.toFixed(0)}<small> \u20ac \u00b7 ${ppct}th pct</small></div></div>`+
     `<div class="fstat"><div class="fl">Persistence</div><div class="fv">${persist}<small>/7 days here</small></div></div>`;
@@ -1139,8 +1146,11 @@ function drawRegime(D){
   ctx.beginPath();ctx.moveTo(pad.l,y(pmed));ctx.lineTo(w-pad.r,y(pmed));ctx.stroke();ctx.setLineDash([]);
   // quadrant labels
   ctx.font="9px "+css("--mono");ctx.fillStyle=css("--ink-faint");
-  ctx.textAlign="left"; ctx.fillText("CALM",pad.l+5,h-pad.b-9); ctx.fillText("FIRM",pad.l+5,pad.t+9);
-  ctx.textAlign="right";ctx.fillText("CHOPPY",w-pad.r-5,h-pad.b-9); ctx.fillText("STRESSED",w-pad.r-5,pad.t+9);
+  const corner=(tx,ty,l1,l2,align)=>{ctx.textAlign=align;ctx.fillText(l1,tx,ty);ctx.fillText(l2,tx,ty+10);};
+  corner(pad.l+5, h-pad.b-19, "LOW VOL",  "LOW PRICE",  "left");
+  corner(pad.l+5, pad.t+5,    "LOW VOL",  "HIGH PRICE", "left");
+  corner(w-pad.r-5, h-pad.b-19,"HIGH VOL","LOW PRICE",  "right");
+  corner(w-pad.r-5, pad.t+5,  "HIGH VOL", "HIGH PRICE", "right");
   // trajectory (last 8)
   ctx.strokeStyle=css("--line-2");ctx.lineWidth=1;ctx.beginPath();
   R.slice(-8).forEach((pt,i)=>{const px=x(pt.v),py=y(pt.p);i?ctx.lineTo(px,py):ctx.moveTo(px,py);});ctx.stroke();
