@@ -7,10 +7,13 @@ heading tomorrow**, and **how much risk is in it** — across all seven bidding 
 No database, no server, no build step: a re-runnable ETL writes plain JSON, and a single HTML
 file reads it.
 
-<!-- Add screenshots to docs/img/ and they will render here.
-     Suggested: the Overview tab (map + market read), and the Gas & costs tab. -->
-![Overview — zonal map and market read](docs/img/overview.png)
-![Gas & costs — spark spread and storage](docs/img/gas.png)
+![Overview — the market read and tomorrow's expected residual demand](docs/img/overview.png)
+
+The zonal map is the centrepiece: seven bidding zones, an hour slider, and inter-zonal flow
+arrows. Below, an hour where the North clears at 64 €/MWh while Sicily is at 310 — the island
+decoupled, its link binding.
+
+![Zonal map — prices by bidding zone with inter-zonal flow arrows](docs/img/map.png)
 
 ---
 
@@ -58,6 +61,18 @@ python -m http.server         # from the repo root
 | **Power** | recent trend and percentile, generation mix (the supply side of the price), cross-border flows by interconnector |
 | **Gas & costs** | TTF, EUA, the marginal CCGT's SRMC and the clean spark spread; gas storage against its 6-year seasonal band |
 | **Risk** | realised volatility (peak vs off-peak, gas→power β) and a market-regime phase scatter: calm / firm / choppy / stressed |
+
+**Power** — the supply side: what is covering demand, and which border carries the import.
+
+![Power — generation mix and cross-border flows](docs/img/power.png)
+
+**Gas & costs** — the cost floor under the power price, and the gas fundamental under that.
+
+![Gas & costs — spark spread and gas storage against its seasonal band](docs/img/gas.png)
+
+**Risk** — where the market sits in volatility/price space, and how long it has been there.
+
+![Risk — the market-regime phase scatter](docs/img/risk.png)
 
 A zone selector switches every zonal panel across the seven bidding zones. Panels that are
 national (gas, storage) or NORD-scoped (border flows) say so on the header.
