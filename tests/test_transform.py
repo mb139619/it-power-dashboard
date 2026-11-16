@@ -100,13 +100,25 @@ def test_supply_side_residual_uses_no_estimate():
 
 
 def test_renewable_share_is_boundary_consistent():
-    """Must-run over total supply: both sides gross, so no net-load/gross-solar mixing."""
+    """Must-run over local generation: both sides gross, so no net-load/gross-solar mixing."""
     idx = pd.date_range("2026-06-01", periods=2, freq="h", tz="Europe/Rome")
     agg = pd.DataFrame({"Solar": [1000., 1000], "Fossil Gas": [1000., 1000]}, index=idx)
     pumping = pd.Series([0., 0], index=idx)
     net_imp = pd.Series([0., 0], index=idx)
     rs = tf.renewable_share(agg, pumping, net_imp)
     assert np.allclose(rs.values, 0.5)          # 1000 solar of 2000 supplied
+
+
+def test_renewable_share_bounded_in_exporting_zone():
+    """IT_SUD-like hour: 3 GW wind + 0.9 GW gas, 3.9 GW exported. Over supply this read ~900%;
+    over local generation it must be the physical 77%."""
+    idx = pd.date_range("2026-11-16", periods=1, freq="h", tz="Europe/Rome")
+    agg = pd.DataFrame({"Wind Onshore": [3000.], "Fossil Gas": [900.]}, index=idx)
+    pumping = pd.Series([0.], index=idx)
+    net_imp = pd.Series([-3890.], index=idx)
+    rs = tf.renewable_share(agg, pumping, net_imp)
+    assert 0 <= rs.iloc[0] <= 1
+    assert np.isclose(rs.iloc[0], 3000 / 3900)
 
 
 def test_renewable_share_no_inf_on_zero_supply():

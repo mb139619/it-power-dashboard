@@ -645,12 +645,18 @@ function valueAtNow(vals, idx){                      // current-hour value, not 
 // We therefore don't read inside the publication window. This is an ASSUMPTION — a declared
 // parameter, not a measured fact — and deliberately not an outlier filter: a filter would hide
 // a genuine load crash (exactly the moment worth seeing), a lag only defers it.
-const SETTLE_MIN = 60;                               // minutes; tune with tools/settle_check.py
+const SETTLE_MIN = 120;                              // minutes; tune with tools/settle_check.py
+// Anchor the window to FETCH time (meta.generated_at), not the viewer's clock: a slot that was
+// provisional when the ETL downloaded it stays provisional in our copy, however old it gets.
+function settleCutoff(){
+  const g = DATA && DATA.live && DATA.meta ? Date.parse(DATA.meta.generated_at) : NaN;
+  return (isNaN(g) ? Date.now() : Math.min(Date.now(), g)) - SETTLE_MIN*60e3;
+}
 function actualsIdx(S, names){
   // ONE reference instant for the actuals: the newest settled row where every actual column is
   // present. Read per-column, each would land on a different instant (load, generation and
   // flows publish with different lags) and the KPIs would contradict each other.
-  const cutoff = Date.now() - SETTLE_MIN*60e3, cols = names.map(n=>col(S,n));
+  const cutoff = settleCutoff(), cols = names.map(n=>col(S,n));
   for(let i=S.index.length-1;i>=0;i--){
     if(new Date(S.index[i]).getTime()>cutoff) continue;   // still inside the publication window
     if(cols.every(c=>c && c[i]!=null)) return i;
@@ -933,7 +939,7 @@ function drawFuels(D){
   const gasComp=gasL/eta, carbComp=euaL*ef/eta;
   const badge=p=>`<span class="prov ${p}">${PROV[p].label}</span>`;
   $("#fuelReadout").innerHTML=
-    `<div class="fstat"><div class="fl">Gas TTF ${badge('observed')}</div><div class="fv">${gasL.toFixed(1)}<small> €/MWhₜ</small></div></div>`+
+    `<div class="fstat"><div class="fl">Gas TTF · EGSI day ${badge('observed')}</div><div class="fv">${gasL.toFixed(1)}<small> €/MWhₜ</small></div></div>`+
     `<div class="fstat"><div class="fl">CO₂ EUA ${badge('observed')}</div><div class="fv">${euaL.toFixed(1)}<small> €/t</small></div></div>`+
     `<div class="fstat"><div class="fl">SRMC (CCGT) ${badge('assumption')}</div><div class="fv">${srmcL.toFixed(0)}<small> €/MWhₑ</small></div><div class="fsub">gas ${gasComp.toFixed(0)} + CO₂ ${carbComp.toFixed(0)} · η=${eta}</div></div>`+
     `<div class="fstat"><div class="fl">Clean spark spread</div><div class="fv ${sparkL>=0?'up':'dn'}">${sparkL>=0?'+':''}${sparkL.toFixed(0)}<small> €/MWh</small></div><div class="fsub">power ${powL.toFixed(0)} − SRMC ${srmcL.toFixed(0)}</div></div>`;
@@ -1382,7 +1388,7 @@ function drawGenMix(S){
   // current shares (last kept step at/just before now)
   // newest SETTLED slot with generation: skip the publication window (provisional, part-reported)
   // and the day-ahead price tail (no generation there yet)
-  const cutoff_=Date.now()-SETTLE_MIN*60e3;
+  const cutoff_=settleCutoff();
   let li=keep.length-1;
   for(let j=keep.length-1;j>=0;j--){
     if(T[j]>cutoff_) continue;

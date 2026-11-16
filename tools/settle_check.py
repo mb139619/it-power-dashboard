@@ -81,7 +81,7 @@ def main(zone: str = "IT_NORD") -> None:
         span = (pd.Timestamp(now["generated_at"]) - pd.Timestamp(oldest)).total_seconds() / 60
         print(f"\n  {revised} values revised; oldest revised slot {oldest[:16]}")
         print(f"  -> revisions reach back ~{span:.0f} min before the new run.")
-        print(f"  Set SETTLE_MIN >= that (currently 60) to stay outside the revision horizon.")
+        print(f"  Set SETTLE_MIN >= that (currently 120) to stay outside the revision horizon.")
 
     SNAP.write_text(json.dumps(now, indent=1))
     print(f"\nsnapshot updated to the current run.")

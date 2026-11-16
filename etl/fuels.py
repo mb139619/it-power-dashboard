@@ -1,4 +1,4 @@
-"""Fuel & carbon anchors — TTF gas and EUA carbon via yfinance (free, no key).
+"""Fuel & carbon anchors — TTF gas (EEX EGSI, see gas_eex.py) and EUA carbon (yfinance).
 
 These are slow EOD anchors (daily), a different timescale from the 15-min electricity data.
 From them we build the marginal combined-cycle gas turbine's short-run marginal cost (SRMC)
@@ -6,8 +6,10 @@ and, joined with the power price, the clean spark spread — the *cost* side of 
 price": when the regime panel says "cost-driven", this shows which cost moved.
 
 Provenance:
-- gas (TTF) and carbon (EUA) are Observed EOD (Yahoo) — a proxy for the exact
-  ICE settlement, direction-correct.
+- gas is Observed: EEX EGSI TTF Day, the volume-weighted day-ahead index for the delivery day
+  (Yahoo's TTF=F front-month stopped serving history in Nov 2026, and a front-month is the
+  wrong product for a marginal cost anyway). Local use only — see gas_eex.py.
+- carbon (EUA) is Observed EOD (Yahoo CO2.L) — a proxy for the exact ICE settlement.
 - efficiency (eta) and the gas emission factor are ASSUMPTIONS — chosen parameters of the
   marginal CCGT, not measured data.
 
@@ -25,7 +27,6 @@ ETA = 0.50                 # thermal efficiency of a modern combined-cycle gas t
 EF_GAS = 0.20              # tCO2 per MWh_thermal of natural gas (physical, ~0.18-0.20)
 
 # --- sources ---
-GAS_TICKER = "TTF=F"       # Dutch TTF front-month, EUR/MWh_th
 CO2_TICKER = "CO2.L"       # EUA-linked instrument on LSE
 CO2_SCALE = 1.0            # multiply raw close -> EUR/tCO2 (adjust if CO2.L units differ)
 
@@ -44,9 +45,12 @@ def _close(ticker: str, start, end) -> pd.Series:
 
 def fetch_fuels(start, end) -> pd.DataFrame:
     """Daily gas (EUR/MWh_th), EUA (EUR/tCO2) and SRMC (EUR/MWh_e)."""
-    gas = _close(GAS_TICKER, start, end).rename("gas_ttf")
+    from .gas_eex import gas_series
+    gas = gas_series(start, end)                  # every calendar day, by delivery day
     eua = (_close(CO2_TICKER, start, end) * CO2_SCALE).rename("eua")
-    df = pd.concat([gas, eua], axis=1).sort_index().ffill()   # carry last close over gaps
+    # EUA does not trade at weekends: carry the last close; gas has its own weekend values
+    df = pd.concat([gas, eua], axis=1).sort_index()
+    df["eua"] = df["eua"].ffill()
     df["srmc"] = (df["gas_ttf"] + df["eua"] * EF_GAS) / ETA
     return df
 

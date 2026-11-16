@@ -6,8 +6,13 @@ objects. No transforms here. Requires env var ENTSOE_TOKEN.
 from __future__ import annotations
 
 import os
+import time
 import pandas as pd
+import requests
 from entsoe import EntsoePandasClient
+
+RETRIES = 4            # attempts per query on a transient server error
+BACKOFF_S = 15         # first wait; doubles each attempt (15, 30, 60)
 
 
 def _client() -> EntsoePandasClient:
@@ -15,6 +20,29 @@ def _client() -> EntsoePandasClient:
     if not token:
         raise RuntimeError("Set ENTSOE_TOKEN in the environment (free ENTSO-E token).")
     return EntsoePandasClient(api_key=token)
+
+
+def _transient(e: Exception) -> bool:
+    """5xx (incl. ENTSO-E's non-standard 599 'overloaded') and timeouts are worth retrying.
+    entsoe-py's own retry only covers connection errors, so a 599 would otherwise sink the
+    whole zone. 4xx and NoMatchingDataError are real answers — never retried."""
+    if isinstance(e, requests.HTTPError) and e.response is not None:
+        return e.response.status_code >= 500
+    return isinstance(e, (requests.Timeout, requests.ConnectionError))
+
+
+def _call(label: str, fn, *args, **kwargs):
+    delay = BACKOFF_S
+    for attempt in range(1, RETRIES + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            if attempt == RETRIES or not _transient(e):
+                raise
+            print(f"[fetch] {label}: {type(e).__name__} ({str(e)[:40]}) — "
+                  f"retry {attempt}/{RETRIES - 1} in {delay}s")
+            time.sleep(delay)
+            delay *= 2
 
 
 def fetch_zone(zone: str, start: pd.Timestamp, end: pd.Timestamp) -> dict:
@@ -25,18 +53,20 @@ def fetch_zone(zone: str, start: pd.Timestamp, end: pd.Timestamp) -> dict:
     """
     c = _client()
 
-    price = c.query_day_ahead_prices(zone, start=start, end=end)
+    w = dict(start=start, end=end)
+
+    price = _call(f"{zone} price", c.query_day_ahead_prices, zone, **w)
     price = price.iloc[:, 0] if isinstance(price, pd.DataFrame) else price
     price.name = "price_zonal"
 
-    load = c.query_load(zone, start=start, end=end)
+    load = _call(f"{zone} load", c.query_load, zone, **w)
     load = load.iloc[:, 0] if isinstance(load, pd.DataFrame) else load
     load.name = "load"
 
-    gen = c.query_generation(zone, start=start, end=end)
+    gen = _call(f"{zone} gen", c.query_generation, zone, **w)
 
-    imp = c.query_physical_crossborder_allborders(zone, start=start, end=end, export=False)
-    exp = c.query_physical_crossborder_allborders(zone, start=start, end=end, export=True)
+    imp = _call(f"{zone} import", c.query_physical_crossborder_allborders, zone, **w, export=False)
+    exp = _call(f"{zone} export", c.query_physical_crossborder_allborders, zone, **w, export=True)
     imp = imp.sum(axis=1) if isinstance(imp, pd.DataFrame) else imp
     exp = exp.sum(axis=1) if isinstance(exp, pd.DataFrame) else exp
     net_import = (imp - exp).rename("net_import")

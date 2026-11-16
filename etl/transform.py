@@ -88,19 +88,22 @@ def residual_load_supply(agg: pd.DataFrame, pumping: pd.Series, net_import: pd.S
 
 def renewable_share(agg: pd.DataFrame, pumping: pd.Series, net_import: pd.Series,
                     must_run: set[str] = MUST_RUN) -> pd.Series:
-    """Must-run renewables as a share of TOTAL SUPPLY — one boundary, no estimate.
+    """Must-run renewables as a share of the zone's LOCAL GENERATION — one boundary, no estimate.
 
-    Numerator and denominator are both gross/transmission-served quantities, so no mixing of
-    ENTSO-E's net load with gross solar (the node-A error). This also makes the KPI mean the
-    same thing as the generation-mix panel's "renewables X% of supply". OBSERVED_DERIVED.
+    Both sides are gross generation, so no mixing of ENTSO-E's net load with gross solar (the
+    node-A error), and the KPI means the same thing as the generation-mix panel, which also
+    divides by generation.
+
+    Why not total supply (gen - pumping + net import): in an exporting zone (SUD, CALA, SARD)
+    the export is as large as local output, the denominator collapses towards 0 and the share
+    read 600-900% — over 100% in half of SUD's slots. Bounded in [0, 1] here by construction.
+    pumping / net_import are kept in the signature for call-site stability. OBSERVED_DERIVED.
     """
     present = [c for c in agg.columns if c in must_run]
     if not present:
         return pd.Series(0.0, index=agg.index)
-    sup = total_supply(agg, pumping, net_import)
-    return (agg[present].sum(axis=1) / sup.where(sup > 0)).clip(lower=0)
-
-
+    gen = agg.sum(axis=1)
+    return (agg[present].sum(axis=1) / gen.where(gen > 0)).clip(lower=0, upper=1)
 
 
 # --- generation mix: group ENTSO-E types into readable buckets (supply side of the price) ---

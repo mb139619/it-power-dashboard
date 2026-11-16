@@ -47,19 +47,27 @@ def assemble(zone: str, start: pd.Timestamp, end: pd.Timestamp,
              rebuild: bool = False) -> tuple[dict, dict]:
     raw = fetch_zone_cached(zone, start, end, rebuild=rebuild)  # incremental raw cache
     idx = raw["load"].index                       # canonical grid = load index
+    # Rows with NO generation reported yet (the day-ahead tail: price known, actuals not) must
+    # stay NaN. split_generation fills gaps with 0, which would publish residual = 0 and a
+    # 0-MW mix for the rest of today — and the SPA would read those zeros as settled actuals.
+    g = raw["gen"]
+    g_agg = g.xs("Actual Aggregated", axis=1, level=1) if isinstance(g.columns, pd.MultiIndex) else g
+    gen_ok = g_agg.notna().any(axis=1).reindex(idx, fill_value=False)
     agg, pumping = tf.split_generation(raw["gen"])
-    agg = agg.reindex(idx).interpolate(limit=2)
-    mix = tf.generation_mix(agg)                  # six supply buckets for the mix panel
+    agg = agg.reindex(idx).where(gen_ok).interpolate(limit=2, limit_area="inside")
+    mix = tf.generation_mix(agg).where(agg.notna().any(axis=1))   # six buckets; NaN where unreported
     pumping = pumping.reindex(idx).fillna(0.0)
-    net_import = raw["net_import"].reindex(idx).interpolate(limit=2)
+    net_import = raw["net_import"].reindex(idx).interpolate(limit=2, limit_area="inside")
     price = raw["price"].reindex(idx)
+    actual_ok = agg.notna().any(axis=1) & net_import.notna()   # both sides of the balance present
 
     # JC#6-rev2: read the residual off the SUPPLY side. No distributed-PV estimate — that
     # quantity is not identifiable from the closure error on free data (6 of 7 zones gave
     # physically impossible shares at similar R^2: misspecification, not noise). See docs.
-    resid = tf.residual_load_supply(agg, pumping, net_import).reindex(idx)
-    ren_pen = tf.renewable_share(agg, pumping, net_import).reindex(idx)
-    eps = tf.closure_error(raw["load"], agg, pumping, net_import).reindex(idx)
+    resid = tf.residual_load_supply(agg, pumping, net_import).reindex(idx).where(actual_ok)
+    ren_pen = tf.renewable_share(agg, pumping, net_import).reindex(idx).where(actual_ok)
+    eps = (tf.closure_error(raw["load"], agg, pumping, net_import).reindex(idx)
+           .where(actual_ok & raw["load"].reindex(idx).notna()))
 
     def col(series, unit, provenance, **extra):
         return {"unit": unit, "provenance": provenance,
@@ -171,6 +179,31 @@ def _at_now(series: dict, col: str):
         return None
     at = s[s.index <= pd.Timestamp.now(tz=cfg.TZ)]
     return float((at if not at.empty else s).iloc[-1])
+
+
+SETTLE_MIN = 120  # minutes — mirrors SETTLE_MIN in spa/index.html (tools/settle_check.py)
+ACTUAL_COLS = ("load", "residual_load", "renewable_penetration", "net_import")
+
+
+def _settled_idx(series: dict, fetched_at=None) -> int:
+    """Row of the newest SETTLED instant where every actual column is present — the same rule
+    as the SPA's actualsIdx(). The frontier slot is provisional (part-reported): NORD load read
+    9.0 then 5.3 GW in the last two slots of a ~22 GW afternoon.
+
+    The cutoff is anchored to FETCH time, not wall-clock: a slot that was provisional when we
+    downloaded it stays provisional in our copy, however old it gets."""
+    ref = pd.Timestamp(fetched_at) if fetched_at else pd.Timestamp.now(tz=cfg.TZ)
+    cutoff = ref - pd.Timedelta(minutes=SETTLE_MIN)
+    idx = pd.to_datetime(series["index"], utc=True)
+    cols = [series["columns"][c]["values"] for c in ACTUAL_COLS]
+    for i in range(len(idx) - 1, -1, -1):
+        if idx[i] <= cutoff and all(c[i] is not None for c in cols):
+            return i
+    return -1
+
+
+def _at_settled(series: dict, col: str, i: int):
+    return series["columns"][col]["values"][i] if i >= 0 else None
 
 
 def publish_internal_flows(days: int = 3) -> dict | None:
@@ -360,6 +393,11 @@ def publish_fuels(start=None, end=None) -> dict | None:
     df = fuels.fetch_fuels(start.date(), end.date()).dropna(how="all")
     for w in fuels.sanity(df):
         print(f"[fuels][warn] {w}")
+    # publish guard: a source that returns no history (Yahoo has dropped TTF=F history before)
+    # must not overwrite a good fuels.json with an all-null gas/SRMC panel
+    thin = [c for c in ("gas_ttf", "eua") if c not in df or df[c].notna().sum() < 0.5 * len(df)]
+    if df.empty or thin:
+        raise RuntimeError(f"[guard] refused to publish fuels.json: too little data in {thin or 'all'}")
     out = {
         "index": [d.date().isoformat() for d in df.index],
         "columns": {
@@ -444,6 +482,7 @@ def build_snapshot(rows: dict, window_end: str | None, profile_date: str | None 
             "spread_vs_pun": round(p - pun) if (p is not None and pun is not None) else None,
             "residual": round(r["residual"]) if r.get("residual") is not None else None,
             "renewable_pct": round(r["renewable"] * 100) if r.get("renewable") is not None else None,
+            "actuals_at": r.get("actuals_at"),    # settled instant of residual/renewable
             "profile": r.get("profile"),          # 24 hourly zonal prices (last full day)
         }
     # default the slider to the hour with the widest cross-zone spread (most congestion)
@@ -478,11 +517,13 @@ def publish_all(zones, start=None, end=None, rebuild: bool = False) -> dict:
             prof, pdate = _hourly_profile(series)
             profile_date = pdate or profile_date
             lprof, _ = _hourly_profile(series, "load")
+            si = _settled_idx(series, meta["generated_at"])  # one settled instant for all actuals
             rows[z] = {"price": _at_now(series, "price_zonal"),
-                       "load": _at_now(series, "load"),
+                       "load": _at_settled(series, "load", si),
                        "load_profile": lprof,
-                       "residual": _at_now(series, "residual_load"),
-                       "renewable": _at_now(series, "renewable_penetration"),
+                       "residual": _at_settled(series, "residual_load", si),
+                       "renewable": _at_settled(series, "renewable_penetration", si),
+                       "actuals_at": series["index"][si] if si >= 0 else None,
                        "profile": prof}
         except Exception as e:
             # a failed zone (guard OR network) must not sink the others; keep the type

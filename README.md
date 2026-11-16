@@ -110,6 +110,20 @@ national (gas, storage) or NORD-scoped (border flows) say so on the header.
   and the volumes, but through its website rather than an API. Load weighting removes most of
   the error an unweighted mean carries (2-3%, up to 4.5 EUR/MWh when an island decouples).
 
+## Gas price source — local use only
+
+The SRMC and spark spread use **EEX EGSI TTF Day**, the volume-weighted day-ahead index for
+the delivery day: the marginal CCGT's opportunity cost is the price of gas *for the day it
+burns it*, so a spot index beats the front-month, and EGSI prices weekends too. TTF + a PSV
+basis would be exact for Italy; the basis is not applied (Known gaps).
+
+The series is read from the endpoint behind EEX's public Market Data Hub page — not a
+documented API — which serves a rolling one-year window, so `etl/gas_eex.py` accumulates it in
+`data/raw/gas_egsi.parquet`. EEX's terms forbid systematic republication: **the dashboard is
+meant to run locally, and neither the series nor the cache is committed or published.** If the
+endpoint changes, the build keeps serving the cache and the panel shows the last good day.
+Gas history therefore starts on 2025-11-17, six weeks after the power window.
+
 ## Methodology
 
 [`docs/nodi_A_B_metodologia.md`](docs/nodi_A_B_metodologia.md) is the reasoning, not a summary:
@@ -123,7 +137,8 @@ current one.
 ## Stack
 
 Python (pandas, pyarrow) · [ENTSO-E Transparency](https://transparency.entsoe.eu) via
-`entsoe-py` · [GIE AGSI+](https://agsi.gie.eu) via `gie-py` · TTF/EUA via `yfinance` ·
+`entsoe-py` · [GIE AGSI+](https://agsi.gie.eu) via `gie-py` · TTF gas: EEX EGSI TTF Day
+(see below) · EUA via `yfinance` ·
 [Open-Meteo](https://open-meteo.com) (client-side) · vanilla JS + canvas, no framework.
 
 ```
