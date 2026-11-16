@@ -447,7 +447,7 @@
         <h2>Gas storage vs the seasonal norm <span class="scope">national</span></h2>
         <div class="thesis">Italy's storage fill against its historical range for the time of
           year. Below the band means gas is tight for the season — the fundamental behind a bid
-          TTF, which lifts SRMC and squeezes the spark spread above.</div>
+          TTF, which lifts SRMC — the cost floor under the power price.</div>
       </div>
       <div class="legend">
         <span><span class="swatch" style="background:var(--residual)"></span>this year</span>
@@ -632,7 +632,9 @@ function renderKPIs(S){
   const items=[
     {name:"Zonal price", val:fmt(P.v,1), unit:"€/MWh", prov:S.columns.price_zonal.provenance,
      delta:dP, dunit:"€/MWh",
-     sub: (base!=null?`${baseLbl} ${fmt(base,1)}`:"") + (pAt?` · at ${hhmm(pAt)}`:"")},
+     // the slot as an interval (period start -> start of the next slot), like the map's hour
+     sub: (base!=null?`${baseLbl} ${fmt(base,1)}`:"") +
+          (pAt?` · ${hhmm(pAt)}–${hhmm(new Date(P.i+1<S.index.length?S.index[P.i+1]:pAt.getTime()+15*60e3))}`:"")},
     {name:"Load",        val:av(load)!=null?fmt(av(load)):nd, unit:"MW", prov:S.columns.load.provenance},
     {name:"Residual",    val:av(res)!=null?fmt(av(res)):nd,   unit:"MW", prov:S.columns.residual_load.provenance,
      delta:dR, dunit:"MW"},
@@ -705,8 +707,11 @@ function drawTS(S){
   ctx.globalAlpha=.10;ctx.fillStyle=css("--residual");ctx.beginPath();ctx.moveTo(x(t[0]),h-pad.b);
   for(let i=0;i<res.length;i++)ctx.lineTo(x(t[i]),yR(res[i]));ctx.lineTo(x(t.at(-1)),h-pad.b);ctx.closePath();ctx.fill();ctx.globalAlpha=1;
   line(res,yR,css("--residual")); line(price,yP,css("--price"));
-  const pc=pctl(price,price.at(-1)), tag=pc>=.8?"elevated":pc<=.2?"soft":"mid-range";
-  $("#tsCaption").innerHTML=`Last 28 days. Latest price <b class="mono" style="color:var(--ink)">${fmt(price.at(-1),1)}</b> \u20ac/MWh sits at the <b class="mono" style="color:var(--ink)">${Math.round(pc*100)}th</b> percentile of the window \u2014 <b>${tag}</b>. Hover to read any moment.`;
+  // the price NOW (same reading as the KPI), not the last slot of the chart: the chart stops at
+  // the newest settled actuals, hours behind the day-ahead price
+  const pNow=valueAtNow(col(S,"price_zonal"),S.index).v ?? price.at(-1);
+  const pc=pctl(price,pNow), tag=pc>=.8?"elevated":pc<=.2?"soft":"mid-range";
+  $("#tsCaption").innerHTML=`Last 28 days. Price now <b class="mono" style="color:var(--ink)">${fmt(pNow,1)}</b> \u20ac/MWh sits at the <b class="mono" style="color:var(--ink)">${Math.round(pc*100)}th</b> percentile of the window \u2014 <b>${tag}</b>. Hover to read any moment.`;
 }
 
 function corr(a,b){const p=[];for(let i=0;i<a.length;i++)if(Number.isFinite(a[i])&&Number.isFinite(b[i]))p.push([a[i],b[i]]);
@@ -965,26 +970,38 @@ function drawStorage(D){
   S.current.forEach((p,i)=>{const px=x(p.doy),py=y(p.full);i?ctx.lineTo(px,py):ctx.moveTo(px,py);});ctx.stroke();
   const tight=vs<0;
   $("#storageCaption").innerHTML=`${S.country} storage <b class="mono" style="color:var(--ink)">${L.full}%</b> full \u2014 <b class="mono" style="color:var(--ink)">${vs>=0?'+':''}${vs} pp</b> vs the ${S.hist_years.length}-yr norm. `+
-    `Gas is <b>${tight?'tight':'comfortable'}</b> for the time of year${tight?' \u2014 supports TTF, lifts SRMC, compresses the spark spread':''}.`+
+    `Gas is <b>${tight?'tight':'comfortable'}</b> for the time of year${tight?' \u2014 supports TTF and lifts SRMC, the floor under the power price':''}.`+
     (live?``:` <span style="color:var(--ink-faint)">(sample)</span>`);
 }
 
 /* ---------- zone selector ---------- */
 function zoneShort(z){ return z.replace("IT_",""); }
+// One clock for every "now" figure: the current hour in Europe/Rome, whatever the viewer's zone.
+function romeNow(){ const d=new Date();
+  return {day:new Intl.DateTimeFormat("en-CA",{timeZone:"Europe/Rome"}).format(d),
+          h:+new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/Rome",hour:"2-digit",hourCycle:"h23"}).format(d)}; }
+function punNow(D){ const z=D.zonal; if(!z) return null; const r=romeNow();
+  return (z.profile_date===r.day && z.pun_profile && z.pun_profile[r.h]!=null) ? z.pun_profile[r.h] : z.pun_proxy; }
 function renderZoneBar(D){
   const bar=$("#zoneBar"); if(!bar) return;
   const live=!!(D.zonal&&D.zonal.zones), zs=live?D.zonal.zones:null;
   const codes = live ? Object.keys(zs) : ["IT_NORD"];
-  const prices = live ? codes.map(z=>zs[z].price).filter(v=>v!=null) : [];
+  // Read every zone at the CURRENT hour in Europe/Rome — the clock the KPI uses. zs[z].price is
+  // frozen at build time, so after a few hours the bar and the KPI quoted different "now"s.
+  const {day:romeDay,h:romeH}=romeNow(), today = live && D.zonal.profile_date===romeDay;
+  const pun = live ? punNow(D) : null;
+  const priceOf = z => (today && zs[z].profile) ? zs[z].profile[romeH] : zs[z].price;
+  const prices = live ? codes.map(priceOf).filter(v=>v!=null) : [];
   const lo=prices.length?Math.min(...prices):0, hi=prices.length?Math.max(...prices):1;
   bar.innerHTML = codes.map(z=>{
-    const d = live?zs[z]:null, p = d?d.price:null, sp = d?d.spread_vs_pun:null;
+    const d = live?zs[z]:null, p = d?priceOf(z):null,
+          sp = (p!=null&&pun!=null) ? Math.round(p-pun) : (d?d.spread_vs_pun:null);
       const c = (p!=null && hi>lo) ? heat((p-lo)/(hi-lo)) : "var(--line-2)";
     return `<div class="zchip ${z===CFG.zone?"active":""} ${live?"":"disabled"}" data-zone="${z}">`+
       `<div class="zc-top"><span class="zc-dot" style="background:${c}"></span>`+
       `<span class="zc-code">${zoneShort(z)}</span></div>`+
       `<div class="zc-price">${p!=null?Math.round(p):"–"}`+
-      (sp!=null?`<span class="zc-sp ${sp>=0?"up":"dn"}">${sp>=0?"+":""}${sp}</span>`:``)+`</div></div>`;
+      (sp!=null?`<span class="zc-sp ${sp>0?"up":sp<0?"dn":""}">${sp>0?"+":sp===0?"±":""}${sp}</span>`:``)+`</div></div>`;
   }).join("");
   if(live) bar.querySelectorAll(".zchip").forEach(c=>c.addEventListener("click",()=>switchZone(c.dataset.zone)));
 }
@@ -1000,7 +1017,7 @@ async function switchZone(z){
     // the day-ahead outlook is zonal too — a zone ENTSO-E doesn't forecast simply has none
     DATA.forecast = await fetch(noCache(`${CFG.dataDir}/forecast_${z}.json`)).then(r=>r.ok?r.json():null).catch(()=>null);
   }catch(e){ CFG.zone=prev; console.error("[zone] load failed",z,e); return; }
-  renderChrome(DATA); renderKPIs(DATA.series); renderZoneBar(DATA); renderTab(activeTab);
+  renderChrome(DATA); renderKPIs(DATA.series); renderZoneBar(DATA); buildTicker(DATA); renderTab(activeTab);
 }
 
 /* ---------- panel: cross-border flows ---------- */
@@ -1162,7 +1179,7 @@ function drawGenMix(S){
   const cur=GEN_STACK.map((_,ci)=>val(ci,keep[li])); const tot=cur.reduce((a,b)=>a+b,0)||1;
   const thermalPct=Math.round(cur[0]/tot*100);
   const renPct=Math.round((cur[2]+cur[3]+cur[4]+cur[5])/tot*100);   // hydro+geo+wind+solar
-  $("#genCaption").innerHTML=`Right now thermal is <b class="mono" style="color:var(--warn)">${thermalPct}%</b> of supply, renewables <b class="mono" style="color:var(--obs)">${renPct}%</b>. `+
+  $("#genCaption").innerHTML=`Right now thermal is <b class="mono" style="color:var(--warn)">${thermalPct}%</b> of supply, hydro + wind + solar + geo <b class="mono" style="color:var(--obs)">${renPct}%</b> (all hydro — the Renewable KPI counts run-of-river only). `+
     (thermalPct>=45?`The fossil fleet is carrying the load — its SRMC is setting the price.`
      :thermalPct>=25?`Thermal is on the margin but renewables are taking a real share.`
      :`Renewables dominate — thermal is near the margin only at the edges.`)+
@@ -1222,13 +1239,15 @@ function buildTicker(D){
   const track=document.getElementById("tickerTrack"); if(!track) return;
   const arr=(l,p)=> p==null?"":(l>=p?" ▲":" ▼"), dc=(l,p)=> p==null?"":(l>=p?"up":"dn");
   const it=[];
-  if(D.zonal&&D.zonal.pun_proxy!=null) it.push(tickItem("PUN", D.zonal.pun_proxy+" €", ""));
+  const pn_=punNow(D); if(pn_!=null) it.push(tickItem("PUN", Math.round(pn_)+" €", ""));
   const F=(D.fuels&&D.fuels.index)?D.fuels:SAMPLE_FUELS, fl=fuelLastPrev(F);
   if(fl.gas[0]!=null) it.push(tickItem("TTF", fl.gas[0].toFixed(1)+arr(...fl.gas), dc(...fl.gas)));
   if(fl.eua[0]!=null) it.push(tickItem("EUA", fl.eua[0].toFixed(1)+arr(...fl.eua), dc(...fl.eua)));
   if(fl.srmc[0]!=null) it.push(tickItem("SRMC", fl.srmc[0].toFixed(0)+" €", ""));
-  if(D.series&&fl.srmc[0]!=null){ const pn=valueAtNow(col(D.series,"price_zonal"),D.series.index).v, sp=pn-fl.srmc[0];
-    it.push(tickItem("SPARK", (sp>=0?"+":"")+sp.toFixed(0)+" €", sp>=0?"up":"dn")); }
+  if(D.series&&F.columns&&F.columns.srmc){   // same reading as the gas panel: latest day with both legs
+    const dp=dailyMean(D.series,"price_zonal"), sv=F.columns.srmc.values; let sp=null;
+    for(let i=F.index.length-1;i>=0;i--) if(sv[i]!=null&&dp[F.index[i]]!=null){ sp=dp[F.index[i]]-sv[i]; break; }
+    if(sp!=null) it.push(tickItem("SPARK "+zoneShort(CFG.zone), (sp>=0?"+":"")+sp.toFixed(0)+" €", sp>=0?"up":"dn")); }
   const st=(D.storage&&D.storage.latest)?D.storage.latest:null;
   if(st) it.push(tickItem("STORAGE", st.full+"% ("+(st.vs_hist_avg>=0?"+":"")+st.vs_hist_avg+"pp)", st.vs_hist_avg<0?"dn":"up"));
   const nl=(D.forecast&&D.forecast.delta_mean!=null)?D.forecast.delta_mean:null;
@@ -1243,15 +1262,20 @@ function buildTicker(D){
   renderZoneBar(DATA);
   startClock(); buildTicker(DATA);
   const zp=zoneProfiles(DATA), zs=$("#zSlider");
-  zs.value=zp.peak; $("#zHour").textContent=String(zp.peak).padStart(2,"0")+":00";
+  // label the HOUR AS AN INTERVAL: "18:00" alone reads as an instant, but the map shows the
+  // mean of the four quarter-hours 18:00-19:00 (every series is stamped at period start)
+  const hourLbl=h=>`${String(h).padStart(2,"0")}:00–${String((h+1)%24).padStart(2,"0")}:00`;
+  zs.value=zp.peak; $("#zHour").textContent=hourLbl(zp.peak);
   $("#zHint").textContent="drag to watch zones couple at night, split at peak";
-  zs.addEventListener("input",()=>{const hr=+zs.value; $("#zHour").textContent=String(hr).padStart(2,"0")+":00"; renderZones(DATA,hr);});
+  zs.addEventListener("input",()=>{const hr=+zs.value; $("#zHour").textContent=hourLbl(hr); renderZones(DATA,hr);});
   document.querySelectorAll("#tabs button").forEach(b=>b.addEventListener("click",()=>showTab(b.dataset.tab)));
   $("#tsCanvas").addEventListener("mousemove",tsHover);
   $("#tsCanvas").addEventListener("mouseleave",()=>{$("#tsReadout").style.display="none";drawTS(DATA.series);});
   showTab("overview");
   let rt; const redraw=()=>{clearTimeout(rt);rt=setTimeout(()=>renderTab(activeTab),120);};
   window.addEventListener("resize",redraw);
+  let lastH=romeNow().h;                              // bar + ticker read the current hour: keep them current
+  setInterval(()=>{ renderZoneBar(DATA); const h=romeNow().h; if(h!==lastH){ lastH=h; buildTicker(DATA); } }, 60e3);
   // a zoom / DPR change does not always fire resize: re-render at the new resolution, or the
   // canvases keep the old bitmap and get stretched (blurry after zooming back in)
   (function watchDpr(){ const mq=matchMedia(`(resolution: ${devicePixelRatio}dppx)`);

@@ -50,5 +50,6 @@ SOURCES = {
         "notes": "IT data submitted by Terna. Load is on the NET (transmission) "
                  "boundary; solar generation is GROSS (includes distributed).",
     },
-    # Added in later slices: gme (PUN Index GME weights), snam/psv, eex/eua, terna_portal.
+    # Other sources (GIE AGSI+, EEX EGSI gas, Yahoo EUA, Terna flows) live in their own modules;
+    # the full list with access terms is in README "Sources and licences". No GME data (plan).
 }
