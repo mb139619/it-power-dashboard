@@ -181,7 +181,7 @@ def _at_now(series: dict, col: str):
     return float((at if not at.empty else s).iloc[-1])
 
 
-SETTLE_MIN = 120  # minutes — mirrors SETTLE_MIN in spa/index.html (tools/settle_check.py)
+SETTLE_MIN = 120  # minutes — mirrors SETTLE_MIN in spa/index.html (lab/settle_check.py)
 ACTUAL_COLS = ("load", "residual_load", "renewable_penetration", "net_import")
 
 

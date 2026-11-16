@@ -1,12 +1,14 @@
 """Transform layer — the verified analytics core.
 
 These functions are the refactored, tested logic from the boundary-reconciliation
-work (nodes A). The key facts they encode:
-  - eps = Load - (Sum_gen - pumping + net_import) = -(distributed generation)
-  - so distributed PV ~= max(-eps, 0)  (first-order, ENTSO-E only)
-  - residual is boundary-invariant once consistent; we compute it on the
-    market-facing boundary by stripping distributed PV out of solar.
-Anything that touches the distributed-PV estimate is Estimated, not Observed.
+work (node A). The key facts they encode:
+  - ENTSO-E load is on the NET (transmission) boundary, solar generation is GROSS;
+  - eps = Load - (Sum_gen - pumping + net_import) is the closure error the free data cannot
+    explain. It is published as-is, NOT attributed to distributed PV: the distributed-PV
+    estimator was withdrawn (JC#6-rev2, see docs) because it is not identifiable from eps;
+  - the residual is therefore read off the SUPPLY side (dispatchable - pumping + net import),
+    from observed columns only.
+Every output here is Observed or Derived; nothing is Estimated.
 """
 from __future__ import annotations
 

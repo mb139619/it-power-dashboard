@@ -5,9 +5,9 @@ default 60 min). That constant is an ASSUMPTION. This measures it from your own 
 run it, re-run the ETL later, run it again, and it reports which slots got revised and by how
 much. Set SETTLE_MIN to comfortably cover the revision horizon you actually observe.
 
-    python tools/settle_check.py            # snapshot the current tail
+    python lab/settle_check.py            # snapshot the current tail
     python -m etl.build IT_NORD             # ... later, refresh the data
-    python tools/settle_check.py            # compare: what changed, and how far back?
+    python lab/settle_check.py            # compare: what changed, and how far back?
 
 Revisions are expected: Reg. 543/2013 sets publication deadlines per data item and providers
 overwrite earlier submissions as units report in. The question is only *how far back* they

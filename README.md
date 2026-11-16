@@ -1,13 +1,12 @@
 # IT·POWER — Italian power & gas market intelligence
 
 A market-intelligence terminal for the Italian electricity market, built entirely on free
-public data. It answers three questions: **why is the price where it is**, **where is it
-heading tomorrow**, and **how much risk is in it** — across all seven bidding zones.
+public data. It answers two questions across all seven bidding zones: **why is the price where
+it is** — demand, supply mix, imports, zonal coupling — and **what it costs the marginal plant**
+— gas, carbon, the CCGT's SRMC and the spark spread.
 
 No database, no server, no build step: a re-runnable ETL writes plain JSON, and a single HTML
 file reads it.
-
-![Overview — the market read and tomorrow's expected residual demand](docs/img/overview.png)
 
 The zonal map is the centrepiece: seven bidding zones, an hour slider, and inter-zonal flow
 arrows. Below, an hour where the North clears at 64 €/MWh while Sicily is at 310 — the island
@@ -25,9 +24,9 @@ Every published column carries **what kind of number it is**:
 |---|---|---|
 | **Observed** | measured / cleared, taken as-is | zonal price, load |
 | **Derived** | an exact function of observed inputs | residual demand, renewable share |
-| **Proxy** | a stand-in, not the true quantity | PUN (unweighted mean of zonal prices) |
+| **Proxy** | a stand-in, not the true quantity | PUN (zonal prices weighted by zonal load) |
 | **Assumption** | a chosen parameter, declared | CCGT efficiency η = 0.50 |
-| **Forecast** | a model output, not an observation | tomorrow's net load |
+| **Forecast** | a model output, not an observation | tomorrow's net load (outlook, parked) |
 
 There is no **Estimated** badge: no published quantity is reconstructed. Quantities that are
 not observable from free data are listed under [Known gaps](#known-gaps) rather than
@@ -39,28 +38,22 @@ approximated — a constraint that drove the project's main methodological decis
 ```bash
 cp .env.example .env          # ENTSOE_TOKEN and AGSI_KEY — both free, both git-ignored
                               # TERNA_API_KEY/SECRET optional: adds the map's flow arrows
-                              # TERNA_API_KEY/SECRET are optional (adds the map's flow arrows)
 pip install -r requirements.txt
 
-python -m etl.build           # 7 zones + snapshot + fuels + storage + forecasts + flows
+python -m etl.build           # 7 zones + snapshot + fuels (EEX gas) + storage + flows
 python -m http.server         # from the repo root
 # open http://localhost:8000/spa/
 ```
 
-`pytest tests/ -q` → 22 guardrail tests.
-
-> **Timing.** ENTSO-E publishes tomorrow's day-ahead forecast around midday. A morning run
-> therefore shows only today in the *Tomorrow* panel; run in the afternoon for the forward
-> signal.
+`pytest tests/ -q` runs the guardrail tests (no network).
 
 ## What's inside
 
 | tab | answers |
 |---|---|
-| **Overview** | the market read (a fundamental bias with the conditions that would invalidate it), tomorrow's expected residual demand, the zonal map with an hour slider — zones couple at night and split at peak, with inter-zonal flow arrows marking which link is binding — and weather as demand context |
+| **Overview** | the zonal map with an hour slider — zones couple at night and split at peak, with inter-zonal flow arrows marking which link is binding — and weather as demand context |
 | **Power** | recent trend and percentile, generation mix (the supply side of the price), cross-border flows by interconnector |
 | **Gas & costs** | TTF, EUA, the marginal CCGT's SRMC and the clean spark spread; gas storage against its 6-year seasonal band |
-| **Risk** | realised volatility (peak vs off-peak, gas→power β) and a market-regime phase scatter: calm / firm / choppy / stressed |
 
 **Power** — the supply side: what is covering demand, and which border carries the import.
 
@@ -69,10 +62,6 @@ python -m http.server         # from the repo root
 **Gas & costs** — the cost floor under the power price, and the gas fundamental under that.
 
 ![Gas & costs — spark spread and gas storage against its seasonal band](docs/img/gas.png)
-
-**Risk** — where the market sits in volatility/price space, and how long it has been there.
-
-![Risk — the market-regime phase scatter](docs/img/risk.png)
 
 A zone selector switches every zonal panel across the seven bidding zones. Panels that are
 national (gas, storage) or NORD-scoped (border flows) say so on the header.
@@ -100,11 +89,16 @@ national (gas, storage) or NORD-scoped (border flows) say so on the header.
   than attributed to solar. Cross-checked against Terna's national self-consumption series,
   roughly half of it is not solar at all: 2.6 GW is present at night (industrial CHP, biogas,
   small hydro below ENTSO-E's reporting thresholds).
-- **PSV–TTF basis.** The true PSV is commercial (ICIS Heren); the free GME MGP-GAS is a
-  different price with no clean API. The signal is small (~1-3 EUR/MWh) and the only free route
-  requires scraping, so the basis is documented rather than implemented.
-- **Forward curve.** EEX power forwards are paid data, so this is a *fundamental* read, not a
-  spot-vs-forward view — and the market-read panel says exactly that.
+- **PSV–TTF basis.** The SRMC is built on TTF. PSV has no spot product on EEX, the true PSV
+  assessment is commercial (ICIS Heren) and the free GME MGP-GAS has no clean API. The basis is
+  small (~1-3 EUR/MWh) and documented rather than implemented.
+- **Forward curve.** EEX power forwards are paid data, so this is a *fundamental* view, not a
+  spot-vs-forward one.
+- **Tomorrow's outlook — parked.** ENTSO-E's day-ahead forecasts give a demand-side net load
+  (load − wind − solar), while the history is supply-side; the two are not comparable until
+  they share one definition, so the panel is off (`CFG.showOutlook`).
+- **Renewable share** is must-run over *local generation*, the same base as the generation-mix
+  panel. Over total supply it exceeded 100% in exporting zones (SUD, CALA, SARD).
 - **Exact PUN.** Ours weights zonal prices by zonal load (Proxy). The real PUN Index GME
   weights by MGP purchase volumes, which exclude pumping and exports; GME publishes the index
   and the volumes, but through its website rather than an API. Load weighting removes most of
@@ -123,6 +117,19 @@ documented API — which serves a rolling one-year window, so `etl/gas_eex.py` a
 meant to run locally, and neither the series nor the cache is committed or published.** If the
 endpoint changes, the build keeps serving the cache and the panel shows the last good day.
 Gas history therefore starts on 2025-11-17, six weeks after the power window.
+
+## Sources and licences
+
+| data | source | access | use here |
+|---|---|---|---|
+| zonal prices, load, generation, cross-border flows, forecasts | [ENTSO-E Transparency Platform](https://transparency.entsoe.eu) | free token | local |
+| inter-zonal flows (map arrows, optional) | [Terna](https://developer.terna.it) | free API key | local |
+| gas storage | [GIE AGSI+](https://agsi.gie.eu) | free API key | local |
+| gas price, EGSI TTF Day | [EEX](https://www.eex.com/en/market-data/market-data-hub) | public page endpoint, undocumented | **local only**, no republication |
+| EUA carbon | Yahoo Finance (`CO2.L`) via `yfinance` | unofficial | local |
+| weather | [Open-Meteo](https://open-meteo.com) | free, client-side | local |
+
+Each provider's terms apply; check them before publishing anything derived from this data.
 
 ## Methodology
 
@@ -145,9 +152,9 @@ Python (pandas, pyarrow) · [ENTSO-E Transparency](https://transparency.entsoe.e
 etl/          fetch → cache → transform → guard → JSON      (CLI: python -m etl.build)
               internal_flows.py is optional: without Terna keys the map just omits the arrows
 spa/          the dashboard: one file, no build step (DESIGN.md — identity, and one reversal on the record)
-tools/        settle_check.py — measure ENTSO-E's real revision horizon
 docs/         methodology
-tests/        22 tests: transform identities, cache, fuels, flows, forecast, leakage
+tests/        guardrail tests: transform identities, cache, gas adapter, fuels, flows, forecast
+lab/          parked work, not used by the dashboard (lab/README.md)
 ```
 
 ## Acknowledgements

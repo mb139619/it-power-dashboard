@@ -7,7 +7,7 @@
 data/*.json
 data/raw/
 data/epf/
-tools/_settle_snapshot.json
+lab/_settle_snapshot.json
 
 # python
 __pycache__/

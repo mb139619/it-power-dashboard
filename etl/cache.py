@@ -5,9 +5,9 @@ fetch time, because entsoe-py issues one request per border, twice). So we cache
 ENTSO-E series per zone in data/raw/<zone>.parquet and, on later runs, fetch only the tail
 we don't have — plus a 2-day overlap to absorb ENTSO-E's revisions of recent data.
 
-Correctness note: only the DOWNLOAD is incremental. The transform (residual, de-biasing)
-always runs on the full cached history in assemble(), because the nighttime baseline (JC#6)
-needs a window — recomputing on an increment alone would drift.
+Correctness note: only the DOWNLOAD is incremental. The transform always runs on the full
+cached history in assemble(), so a revision that lands in the overlap propagates to every
+derived column and the published series never depends on which runs happened before.
 
 The generation frame has MultiIndex columns (type × Actual Aggregated/Consumption); we
 flatten them for parquet and rebuild them on load, transparently to split_generation().
