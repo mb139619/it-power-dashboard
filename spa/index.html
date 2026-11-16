@@ -424,13 +424,14 @@
   <section class="panel">
     <div class="panel-head">
       <div>
-        <h2>The cost of the marginal unit <span class="scope">national</span></h2>
+        <h2>The cost of the marginal unit <span class="scope" id="fuelScope">SRMC national · spark zonal</span></h2>
         <div class="thesis">SRMC = (gas + CO₂) ÷ efficiency. The clean spark spread — power
           price minus SRMC — is what a gas plant keeps after paying for fuel and carbon: the
-          floor under the power price, and which cost — gas or carbon — moved it.</div>
+          floor under the power price, and which cost — gas or carbon — moved it. Gas and carbon
+          are one national cost; the power price, and so the spread, is the selected zone's.</div>
       </div>
       <div class="legend">
-        <span><span class="swatch" style="background:var(--price)"></span>power</span>
+        <span><span class="swatch" style="background:var(--price)"></span><span id="fuelPowLbl">power</span></span>
         <span><span class="swatch" style="background:var(--derived)"></span>SRMC</span>
       </div>
     </div>
@@ -892,7 +893,9 @@ function drawFuels(D){
     `<div class="fstat"><div class="fl">Gas TTF · EGSI day ${badge('observed')}</div><div class="fv">${gasL.toFixed(1)}<small> €/MWhₜ</small></div></div>`+
     `<div class="fstat"><div class="fl">CO₂ EUA ${badge('observed')}</div><div class="fv">${euaL.toFixed(1)}<small> €/t</small></div></div>`+
     `<div class="fstat"><div class="fl">SRMC (CCGT) ${badge('assumption')}</div><div class="fv">${srmcL.toFixed(0)}<small> €/MWhₑ</small></div><div class="fsub">gas ${gasComp.toFixed(0)} + CO₂ ${carbComp.toFixed(0)} · η=${eta}</div></div>`+
-    `<div class="fstat"><div class="fl">Clean spark spread</div><div class="fv ${sparkL>=0?'up':'dn'}">${sparkL>=0?'+':''}${sparkL.toFixed(0)}<small> €/MWh</small></div><div class="fsub">power ${powL.toFixed(0)} − SRMC ${srmcL.toFixed(0)}</div></div>`;
+    `<div class="fstat"><div class="fl">Clean spark spread</div><div class="fv ${sparkL>=0?'up':'dn'}">${sparkL>=0?'+':''}${sparkL.toFixed(0)}<small> €/MWh</small></div><div class="fsub">${zoneShort(CFG.zone)} baseload ${powL.toFixed(0)} − SRMC ${srmcL.toFixed(0)}</div></div>`;
+  $("#fuelScope").textContent=`SRMC national · spark ${CFG.zone}`;
+  $("#fuelPowLbl").textContent=`power · ${zoneShort(CFG.zone)} daily baseload`;
   // ----- chart -----
   const cv=$("#fuelCanvas"); const {ctx,w,h}=setup(cv); const pad={l:46,r:16,t:14,b:24};
   if(T.length<2){$("#fuelCaption").textContent="not enough overlapping fuel + power data";return;}
@@ -915,7 +918,7 @@ function drawFuels(D){
     for(let i=0;i<T.length;i++){const px=x(T[i]),py=y(v[i]);i?ctx.lineTo(px,py):ctx.moveTo(px,py);}ctx.stroke();};
   line(SR,css("--derived")); line(POW,css("--price"));
   const avg=SP.reduce((a,b)=>a+b,0)/SP.length;
-  $("#fuelCaption").innerHTML=`Clean spark spread averages <b class="mono" style="color:var(--ink)">${avg>=0?'+':''}${avg.toFixed(0)}</b> €/MWh over the window`+
+  $("#fuelCaption").innerHTML=`${zoneShort(CFG.zone)} clean spark spread averages <b class="mono" style="color:var(--ink)">${avg>=0?'+':''}${avg.toFixed(0)}</b> €/MWh over the window`+
     ` — gas-fired generation is ${avg>=0?'in the money':'under water'} on average. SRMC uses η=${eta}, gas emission factor ${ef} tCO₂/MWhₜ (Assumption).`+
     (live?``:` <span style="color:var(--ink-faint)">(sample)</span>`);
 }
