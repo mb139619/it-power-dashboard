@@ -99,7 +99,9 @@ national (gas, storage) or NORD-scoped (border flows) say so on the header.
   they share one definition, so the panel is off (`CFG.showOutlook`).
 - **Renewable share** is must-run over *local generation*, the same base as the generation-mix
   panel. Over total supply it exceeded 100% in exporting zones (SUD, CALA, SARD).
-- **Exact PUN.** Ours weights zonal prices by zonal load (Proxy). The real PUN Index GME
+- **Exact PUN.** Ours weights zonal prices by zonal load (Proxy) — the day-ahead load
+  forecast of the same day, so prices and weights always describe the same hours (weights
+  from yesterday's metered load moved the PUN by up to 4.5 EUR/MWh on a Monday). The real PUN Index GME
   weights by MGP purchase volumes, which exclude pumping and exports; GME publishes the index
   and the volumes, but through its website rather than an API. Load weighting removes most of
   the error an unweighted mean carries (2-3%, up to 4.5 EUR/MWh when an island decouples).

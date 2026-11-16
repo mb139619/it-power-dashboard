@@ -425,8 +425,9 @@ def _hourly_profile(series: dict, column: str = "price_zonal"):
     """24 hourly means of `column` for the map slider, preferring TODAY (day-ahead prices are
     complete for today); falls back to the last well-covered day. Returns (profile, date).
 
-    Also used for load, which supplies the PUN weights — the day chosen must match the price
-    profile's, or prices and weights would come from different days."""
+    Not used for the PUN weights: it picks its own best-covered day, and for load that is
+    usually yesterday (today's actuals stop at the last settled slot) — prices and weights
+    would come from different days. _pun_weights pins the weights to the price day."""
     idx = pd.to_datetime(series["index"], utc=True).tz_convert(cfg.TZ)
     price = pd.Series(series["columns"][column]["values"], index=idx).dropna()
     if price.empty:
@@ -444,11 +445,57 @@ def _hourly_profile(series: dict, column: str = "price_zonal"):
     return [round(float(hourly.get(h, fill)), 1) for h in range(24)], chosen.isoformat()
 
 
-def build_snapshot(rows: dict, window_end: str | None, profile_date: str | None = None) -> dict:
-    """Assemble the zonal snapshot the map reads. PUN here is a PROXY (simple mean of
-    zonal prices); the true PUN Index GME is volume-weighted and needs GME data — so the
-    spread inherits that proxy status. Carries residual and renewable share per zone too,
-    so the map can later be coloured by more than price."""
+def _fetch_load_forecast(zone: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
+    """ENTSO-E day-ahead load forecast (MW) for one zone, with the fetch layer's retry."""
+    from .fetch import _client, _call
+    lf = _call(f"{zone} load forecast", _client().query_load_forecast, zone, start=start, end=end)
+    return lf.iloc[:, 0] if isinstance(lf, pd.DataFrame) else lf
+
+
+def _pun_weights(zone: str, series: dict, day: str | None) -> tuple[list | None, str]:
+    """24 hourly PUN weights for `day` — the SAME day as the price profile they weight.
+
+    1st choice: ENTSO-E's day-ahead LOAD FORECAST for that day. It covers all 24 hours as soon
+    as the prices do (published the morning before), and it is what the market knew at the
+    auction — closer in spirit to GME's purchase volumes than metered load.
+    Fallback: actual load on the same weekday one week earlier (same daily shape).
+    The actual load of `day` itself is NOT usable: at build time it stops at the last settled
+    slot, which is why weights used to come silently from the previous day."""
+    if day is None:
+        return None, "none"
+    d0 = pd.Timestamp(day, tz=cfg.TZ)
+
+    def hourly(s: pd.Series):
+        s = s.dropna()
+        s = s[(s.index >= d0) & (s.index < d0 + pd.Timedelta(days=1))] if len(s) else s
+        if s.index.hour.nunique() < 20:
+            return None
+        h = s.groupby(s.index.hour).mean()
+        fill = float(h.mean())
+        return [round(float(h.get(i, fill)), 1) for i in range(24)]
+
+    try:
+        prof = hourly(_fetch_load_forecast(zone, d0, d0 + pd.Timedelta(days=1)).tz_convert(cfg.TZ))
+        if prof:
+            return prof, "load_forecast"
+    except Exception as e:
+        print(f"[pun] {zone}: load forecast unavailable ({type(e).__name__}) — falling back")
+    idx = pd.to_datetime(series["index"], utc=True).tz_convert(cfg.TZ)
+    load = pd.Series(series["columns"]["load"]["values"], index=idx, dtype=float)
+    prof = hourly(load.shift(freq=pd.Timedelta(days=7)))   # last week's same weekday, moved onto `day`
+    return (prof, "load_same_weekday_last_week") if prof else (None, "none")
+
+
+def build_snapshot(rows: dict, window_end: str | None, profile_date: str | None = None,
+                   now_hour: int | None = None) -> dict:
+    """Assemble the zonal snapshot the map reads. PUN here is a PROXY: zonal prices weighted
+    by zonal load (see _pun_weights); the true PUN Index GME weights by purchased volumes and
+    needs GME data — so the spread inherits that proxy status. Carries residual and renewable
+    share per zone too, so the map can later be coloured by more than price.
+
+    now_hour: when the profile is today's, the scalar PUN is the profile at that hour, so it
+    uses the same prices AND weights as the map, instead of pairing the price now with the load
+    of the last settled instant."""
     # PUN Index GME weights zonal prices by the volume PURCHASED in each zone. We don't have
     # GME volumes, but zonal load is the direct measure of that consumption, so weighting by it
     # is far closer than an unweighted mean: a flat average gives Sicily the same weight as the
@@ -474,6 +521,8 @@ def build_snapshot(rows: dict, window_end: str | None, profile_date: str | None 
         for h in range(24):
             v = _wmean([(profs[z][h], (lprofs.get(z) or [None] * 24)[h]) for z in profs])
             pun_profile.append(round(v, 1) if v is not None else None)
+    if pun_profile and now_hour is not None and pun_profile[now_hour] is not None:
+        pun = round(pun_profile[now_hour])
     zones = {}
     for z, r in rows.items():
         p = r.get("price")
@@ -499,9 +548,11 @@ def build_snapshot(rows: dict, window_end: str | None, profile_date: str | None 
         "pun_proxy": pun,
         "pun_profile": pun_profile,
         "peak_hour": peak_hour,
-        "pun_note": "zonal prices weighted by zonal load — PROXY for PUN Index GME, which "
-                    "weights by MGP purchase volumes (excluding pumping and exports). GME "
-                    "publishes the exact index but only via its website, not an API.",
+        "pun_note": "zonal prices weighted by zonal load (day-ahead load forecast for the "
+                    "same day) — PROXY for PUN Index GME, which weights by MGP purchase "
+                    "volumes (excluding pumping and exports). GME publishes the exact index "
+                    "but only via its website, not an API.",
+        "pun_weights": {z: r.get("weight_source", "load_profile") for z, r in rows.items()},
         "provenance": {"price": cfg.P.OBSERVED, "spread_vs_pun": cfg.P.PROXY,
                        "residual": cfg.P.DERIVED, "renewable_pct": cfg.P.DERIVED},
         "zones": zones,
@@ -516,11 +567,11 @@ def publish_all(zones, start=None, end=None, rebuild: bool = False) -> dict:
             window_end = series["index"][-1] if series["index"] else window_end
             prof, pdate = _hourly_profile(series)
             profile_date = pdate or profile_date
-            lprof, _ = _hourly_profile(series, "load")
+            lprof, wsrc = _pun_weights(z, series, pdate)   # weights for the PRICE day
             si = _settled_idx(series, meta["generated_at"])  # one settled instant for all actuals
             rows[z] = {"price": _at_now(series, "price_zonal"),
                        "load": _at_settled(series, "load", si),
-                       "load_profile": lprof,
+                       "load_profile": lprof, "weight_source": wsrc,
                        "residual": _at_settled(series, "residual_load", si),
                        "renewable": _at_settled(series, "renewable_penetration", si),
                        "actuals_at": series["index"][si] if si >= 0 else None,
@@ -533,9 +584,12 @@ def publish_all(zones, start=None, end=None, rebuild: bool = False) -> dict:
         # publish-guard for the map: don't overwrite a good snapshot with an empty one
         print("[guard] no zone succeeded — leaving zonal_snapshot.json intact")
         return build_snapshot(rows, window_end, profile_date)
-    snap = build_snapshot(rows, window_end, profile_date)
+    now = pd.Timestamp.now(tz=cfg.TZ)
+    snap = build_snapshot(rows, window_end, profile_date,
+                          now_hour=now.hour if profile_date == now.date().isoformat() else None)
     _write_json(DATA_DIR / "zonal_snapshot.json", snap, indent=2)
-    print(f"[ok] zonal_snapshot.json: {len(rows)} zones, PUN proxy {snap['pun_proxy']}")
+    print(f"[ok] zonal_snapshot.json: {len(rows)} zones, PUN proxy {snap['pun_proxy']} "
+          f"(weights: {sorted(set(snap['pun_weights'].values()))})")
     try:
         publish_fuels(start, end)
     except Exception as e:
